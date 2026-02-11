@@ -1,59 +1,52 @@
 # AWS Graviton Skills
 
-Collection of Clawdbot skills for AWS Graviton migration and optimization.
+AWS Graviton 迁移和优化 Skill 集合。
 
 ## Skills
 
-### graviton-migration-v2
+### 1. graviton-migration
 
-Migrate AWS workloads from x86 to Graviton (ARM64) processors for 20-40% cost savings and improved performance.
+将 AWS 工作负载从 x86 迁移到 Graviton (ARM64)，实现 20-40% 成本节省。
 
-**Features:**
-- ✅ Automated analysis with AWS Porting Advisor
-- ✅ Manual analysis workflow (fallback when tools unavailable)
-- ✅ Build-first validation approach
-- ✅ Environment detection (native vs cross-build)
-- ✅ Real-world case studies and troubleshooting
-- ✅ Complete migration scripts
+- 自动分析（AWS Porting Advisor）+ 手动分析 + Build-First 验证
+- 支持 ECS Fargate、Lambda、EC2、容器工作负载
+- 包含真实案例和故障排查
 
-**Supports:**
-- ECS Fargate
-- Lambda functions
-- EC2 instances
-- Container workloads
+详细文档: [graviton-migration/SKILL.md](./graviton-migration/SKILL.md)
 
-**Cost Savings:** 20-40% depending on workload type
+### 2. al2-to-al2023-migration
 
-For detailed documentation, see [graviton-migration/SKILL.md](./graviton-migration/SKILL.md)
+EKS 节点从 Amazon Linux 2 迁移到 Amazon Linux 2023。
 
-## Installation
+- 三种迁移方案：Karpenter / 托管节点组 / 自管理节点组
+- 兼容性检查脚本（cgroupv2、IMDS、GPU/CUDA）
+- K8s 1.33 强制迁移时间线和回滚方案
 
-Copy the skill directory to your Clawdbot skills folder:
+详细文档: [al2-to-al2023-migration/SKILL.md](./al2-to-al2023-migration/SKILL.md)
 
-```bash
-cp -r graviton-migration ~/.clawdbot/skills/
+### 3. graviton-performance-tuning
+
+Graviton 实例性能调优指南。
+
+详细文档: [graviton-performance-tuning/](./graviton-performance-tuning/)
+
+### 4. graviton-benchmark
+
+量化对比 Graviton vs x86 实例性能，覆盖 Redis 和 Nginx 典型场景。
+
+- Redis memtier_benchmark：多 IO 线程模式对比
+- Nginx WRK：HTTPS 负载均衡 RPS 和延迟测试
+- OS 级别性能调优（网络、内存、文件描述符）
+- 结果对比模板和性价比计算
+
+详细文档: [graviton-benchmark/SKILL.md](./graviton-benchmark/SKILL.md)
+
+## 目录结构
+
 ```
-
-Or if using global Clawdbot installation:
-
-```bash
-cp -r graviton-migration /path/to/clawdbot/skills/
+aws-graviton-skills/
+├── graviton-migration/           # x86 → ARM64 迁移
+├── al2-to-al2023-migration/      # AL2 → AL2023 迁移
+├── graviton-performance-tuning/  # 性能调优
+└── graviton-benchmark/           # 性能基准测试
 ```
-
-## Usage
-
-The skill is automatically available when Clawdbot loads. Simply ask:
-
-```
-"Help me migrate my ECS service to Graviton"
-"Analyze this project for ARM64 compatibility"
-"Generate a Graviton migration plan"
-```
-
-## Contributing
-
-Contributions welcome! Please submit PRs or open issues.
-
-## License
-
-See individual skill directories for license information.
