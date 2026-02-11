@@ -6,14 +6,30 @@
 
 这是一个帮助你从 Amazon EKS AL2 节点迁移到 AL2023 节点的实战指南。本指南基于 AWS 官方文档和最佳实践，提供分步骤的操作指导。
 
-### 关键信息速查
+### 关键日期时间线
 
-| 项目 | 信息 |
+| 日期 | 事件 |
 |------|------|
-| **AL2 AMI 停止支持** | 2025年11月26日 |
-| **AL2 完全停止维护** | 2026年6月30日 |
-| **最后支持 AL2 的 K8s 版本** | 1.32 |
-| **推荐迁移目标** | AL2023 或 Bottlerocket |
+| **2025年11月26日** | EKS 优化版 AL2 AMI 停止支持（不再发布更新） |
+| **2026年3月26日** | K8s 1.32（最后支持 AL2 的版本）标准支持结束 |
+| **2026年6月30日** | Amazon Linux 2 完全停止维护 |
+| **2027年3月26日** | K8s 1.32 扩展支持结束 |
+
+**关键变更**：从 **Kubernetes 1.33** 开始，Amazon EKS **完全停止提供** AL2 AMI。新建集群默认使用 AL2023 AMI，升级到 1.33 的集群在更新数据平面时会**自动更新至 AL2023**。这意味着迁移不是可选的——升级到 1.33 时会强制切换。
+
+**两个 EOL 日期的区别**：AL2（通用操作系统）和 EKS 优化版 AL2 AMI（专用场景）的停止支持是两个独立的事项。EKS 由于集成复杂度和上游 Kubernetes 的限制（cgroupv1 维护模式），无法在 2025.11.26 后继续支持 AL2。Amazon Linux 团队将 AL2 通用支持延长到 2026.6.30 以便给客户更多迁移时间。
+
+**现有集群行为**：现有的托管节点组可以继续使用 AL2 AMI，节点组扩缩容不受影响。但无法通过更新托管节点组功能获取新的 AL2 AMI 更新。
+
+### 支持矩阵
+
+| 场景 | 支持级别 | 说明 |
+|------|---------|------|
+| AL2023 (cgroupv2) | **完整支持** | 推荐方案 |
+| Bottlerocket | **完整支持** | 推荐方案 |
+| EKS AL2 AMI (2025.11.26 后) | 有限支持 | 不再发布更新，视为自定义 AMI |
+| 自定义 AL2 AMI | 有限支持 | 排查能力受限 |
+| AL2023 (手动改 cgroupv1) | 非官方支持 | 需先在 cgroupv2 下重现问题 |
 
 ---
 
@@ -37,16 +53,22 @@
 
 ```bash
 # 检查当前 Kubernetes 版本
-kubectl version --short
+kubectl version -o json | jq '.serverVersion.gitVersion'
 
 # 检查节点 OS 版本
 kubectl get nodes -o wide
 
 # 检查节点上的 AMI 信息
-aws ec2 describe-instances \
-  --instance-ids $(kubectl get nodes -o jsonpath='{.items[*].spec.providerID}' | sed 's/aws:\/\/\///g') \
-  --query 'Reservations[].Instances[].[InstanceId,ImageId,Tags[?Key==`Name`].Value|[0]]' \
-  --output table
+for node in $(kubectl get nodes -o jsonpath='{.items[*].metadata.name}'); do
+  INSTANCE_ID=$(kubectl get node $node -o jsonpath='{.spec.providerID}' | awk -F/ '{print $NF}')
+  AMI_ID=$(aws ec2 describe-instances --instance-ids $INSTANCE_ID --query 'Reservations[].Instances[].ImageId' --output text 2>/dev/null)
+  echo "$node: $INSTANCE_ID ($AMI_ID)"
+done
+```
+
+或使用自动化检查脚本：
+```bash
+./scripts/check-compatibility.sh
 ```
 
 ### 2. 兼容性检查
@@ -59,15 +81,17 @@ aws ec2 describe-instances \
 | **eksctl** | 0.176.0 | `eksctl version` |
 
 ```bash
-# 升级 VPC CNI
-kubectl apply -f https://raw.githubusercontent.com/aws/amazon-vpc-cni-k8s/release-1.18/config/master/aws-k8s-cni.yaml
+# 升级 VPC CNI（推荐通过 EKS Add-on 管理）
+aws eks update-addon --cluster-name <cluster> --addon-name vpc-cni --addon-version <latest-version>
+# 或查看可用版本：
+aws eks describe-addon-versions --addon-name vpc-cni --kubernetes-version <k8s-version>
 
 # 升级 eksctl
 # macOS
 brew upgrade eksctl
 
 # Linux
-curl --silent --location "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C /tmp
+curl --silent --location "https://github.com/eksctl-io/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C /tmp
 sudo mv /tmp/eksctl /usr/local/bin
 ```
 
@@ -96,6 +120,44 @@ kubectl get pods --all-namespaces -o json | \
 # 检查是否使用了需要 IMDS 的组件
 kubectl get pods --all-namespaces | grep -E "aws-load-balancer-controller|cluster-autoscaler|ebs-csi|efs-csi"
 ```
+
+#### AL2023 中移除的软件包
+
+迁移时注意以下变化：
+- **`/etc/eks/bootstrap.sh` 不再存在** — AL2023 使用 `nodeadm` 和 NodeConfig YAML 替代
+- **`/etc/eks/eni-max-pods.txt` 不再存在** — 通过 NodeConfig 配置 maxPods
+- **`amazon-linux-extras` 不再可用** — 使用 `dnf`/`yum` 安装软件包
+- **EPEL 不再支持** — 需要寻找替代方案
+- **32 位应用不再支持** — AL2023 仅支持 64 位
+- 部分 AL2 源二进制包在 AL2023 中不可用，详见 [AL2 vs AL2023 比较](https://docs.aws.amazon.com/linux/al2023/ug/compare-with-al2.html)
+
+#### nodeadm 用户数据场景
+
+AL2023 使用 `nodeadm` 替代 `bootstrap.sh`，但**不是所有场景都需要手动修改用户数据**：
+
+| 场景 | 是否需要手动提供集群元数据 | 说明 |
+|------|------|------|
+| 托管节点组（无启动模板） | **不需要** | EKS 自动处理 |
+| 托管节点组 + 启动模板（未指定 AMI） | **不需要** | EKS 自动合并用户数据 |
+| 托管节点组 + 启动模板（指定自定义 AMI） | **需要** | EKS 不合并用户数据 |
+| 自管理节点组 | **需要** | 需要完整 NodeConfig 配置 |
+| Karpenter | **不需要** | Karpenter 自动处理 |
+
+对于需要手动配置的场景，可使用 `./scripts/generate-al2023-userdata.sh` 自动生成。
+
+#### IMDSv2 组件依赖详情
+
+AL2023 默认要求 IMDSv2 且 hop limit = 1。以下组件需要特别处理：
+
+| 组件 | 是否需要 IMDS | 替代方案 |
+|------|------|------|
+| **AWS LB Controller** | 必须（获取 VPC ID、Region） | 通过 `--aws-region`、`--aws-vpc-id` Helm 参数显式指定 |
+| **Cluster Autoscaler** | 需要（获取实例信息） | 使用 IRSA 或 EKS Pod Identity |
+| **EBS CSI Driver** | 需要（节点获取实例信息） | v1.45+ 支持 `--metadata-sources=k8s` |
+| **EFS CSI Driver** | 可选 | 使用 IRSA 或 EKS Pod Identity |
+| **VPC CNI** | 可选 | 核心组件，通常在主机网络模式运行 |
+
+**推荐方案**：使用 [EKS Pod Identity](https://docs.aws.amazon.com/eks/latest/userguide/pod-identities.html) 替代 IMDS 依赖，这是最安全的方式。如果必须使用 IMDS，需确保启动模板设置 `HttpPutResponseHopLimit >= 2`。
 
 ### 3. 准备测试环境
 
@@ -555,20 +617,34 @@ aws autoscaling delete-auto-scaling-group \
 Failed to create pod sandbox: rpc error: code = Unknown desc = failed to get sandbox image
 ```
 
-**原因**：AL2023 1.31+ 将 pause 镜像预缓存到 `localhost`，如果手动挂载了 `/var/lib/containerd` 会丢失。
+**原因**：AL2023 1.31+ 将 pause 镜像预缓存到 `localhost`，如果手动挂载了 `/var/lib/containerd` 会丢失。常见于使用实例存储（NVMe）作为 containerd 数据目录的场景。
 
 **解决方案**：
 ```bash
-# 方案 1：手动导入 pause 镜像
+# 方案 1（推荐）：使用 nodeadm LocalStorageOptions 自动挂载实例存储
+# 在 NodeConfig 中配置，nodeadm 会正确处理 pause 镜像缓存
+# ---
+# apiVersion: node.eks.aws/v1alpha1
+# kind: NodeConfig
+# spec:
+#   instance:
+#     localStorage:
+#       strategy: RAID0  # 或 Mount
+#   cluster:
+#     ...
+
+# 方案 2：手动导入 pause 镜像（在 userData 脚本中执行）
 sudo ctr -n k8s.io images import /etc/eks/pause.tar
 
-# 方案 2：修改 containerd 配置使用外部源
+# 方案 3：修改 containerd 配置使用外部源
 sudo cat >> /etc/containerd/config.toml <<EOF
 [plugins.'io.containerd.cri.v1.cri']
   sandbox_image = "registry.k8s.io/pause:3.9"
 EOF
 sudo systemctl restart containerd
 ```
+
+> **注意**：如果使用实例存储（如 i3、i4i 等实例），强烈推荐使用 nodeadm 的 `LocalStorageOptions` 而非手动挂载脚本，这样 nodeadm 会正确处理 pause 镜像和 containerd 数据目录。
 
 ### 问题 2：Java 应用 OOM 错误
 
@@ -826,14 +902,70 @@ spec:
 
 ### 3. 启用 SOCI（适合大镜像）
 
+SOCI (Seekable OCI) 通过 containerd snapshotter 启用，不是 kubelet feature gate。
+
+对于 **AL2023**（>= v20250821 的 AMI 已预装 SOCI）：
 ```yaml
 # NodeConfig
 spec:
   kubelet:
     config:
-      featureGates:
-        FastImagePull: true
+      containerRuntimeEndpoint: unix:///run/containerd/containerd.sock
+  # SOCI 通过 containerd 配置启用，参考 Karpenter Blueprints:
+  # https://github.com/aws-samples/karpenter-blueprints/tree/main/blueprints/soci-snapshotter
 ```
+
+对于 **Bottlerocket**（>= v1.44.0）：
+```toml
+[settings.container-runtime]
+snapshotter = "soci"
+```
+
+详细配置请参考 [Karpenter SOCI Blueprint](https://github.com/aws-samples/karpenter-blueprints/tree/main/blueprints/soci-snapshotter)。
+
+---
+
+## NVIDIA GPU 迁移注意事项
+
+### 驱动版本差异
+
+| 组件 | AL2 AMI | AL2023 AMI |
+|------|---------|------------|
+| NVIDIA GPU 驱动 | R570 | R580 |
+| CUDA 用户模式驱动 | 12.x | 12.x, 13.x |
+| Linux 内核 | 5.10 | 6.1, 6.12 |
+
+### CUDA 13 驱动与 CUDA 12 容器镜像兼容性
+
+AL2023 使用 R580 驱动（CUDA 13），如果容器镜像基于 CUDA 12，可能出现：
+1. **容器启动失败**：NVIDIA 容器镜像通常设置 `NVIDIA_REQUIRE_CUDA=cuda>=X.Y` 环境变量
+2. **运行时异常**：跨 CUDA 主版本可能导致计算结果不一致
+
+**解决方案**（按推荐程度排序）：
+
+1. **升级容器镜像（推荐）**：
+```dockerfile
+# 从
+FROM nvidia/cuda:12.5.0-runtime-ubuntu22.04
+# 改为
+FROM nvidia/cuda:13.0.0-runtime-ubuntu22.04
+```
+
+2. **绕过版本检查（紧急情况）**：
+```yaml
+env:
+  - name: NVIDIA_DISABLE_REQUIRE
+    value: "1"
+```
+此方法仅用于紧急过渡，可能导致未定义行为。
+
+### AWS Neuron (Trainium/Inferentia)
+
+从 AWS Neuron 2.20 开始，Neuron 运行时（`aws-neuronx-runtime-lib`）不再支持 AL2。Neuron 驱动（`aws-neuronx-dkms`）是目前唯一仍支持 AL2 的组件。
+
+如果使用 Neuron 工作负载：
+- 必须使用容器化部署（基于 AL2023 或 Ubuntu 的容器镜像）
+- 参考 [AWS Neuron 设置指南](https://awsdocs-neuron.readthedocs-hosted.com/en/latest/general/setup/index.html)
 
 ---
 
