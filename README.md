@@ -28,7 +28,15 @@ EKS 节点从 Amazon Linux 2 迁移到 Amazon Linux 2023。
 
 Graviton 实例性能调优指南。
 
-详细文档: [graviton-performance-tuning/](./graviton-performance-tuning/)
+- 编译器标志和 LSE 原子操作优化
+- 语言专项调优（Java、Python、Go、Rust、C/C++、Node.js、.NET、PHP）
+- OS/内核参数调优（THP、网络、文件描述符）
+- 二进制优化分析（LSE、NEON、SVE 检测）
+- 性能剖析工具（perf、flamegraph、PMU 计数器）
+- SIMD/向量化移植（SSE2NEON、SIMDe、ARM NEON）
+- 基准测试最佳实践
+
+详细文档: [graviton-performance-tuning/SKILL.md](./graviton-performance-tuning/SKILL.md)
 
 ### 4. graviton-benchmark
 
