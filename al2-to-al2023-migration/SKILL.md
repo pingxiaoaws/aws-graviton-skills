@@ -837,113 +837,138 @@ spec:
 
 ---
 
-## 自动化脚本
+## 自动化工具
 
-### 完整迁移脚本（Karpenter）
+本 Skill 提供了多个自动化脚本来简化迁移流程。所有脚本都位于 `scripts/` 目录。
+
+### 1. 兼容性检查脚本
+
+在迁移前运行，检查环境是否满足 AL2023 要求：
 
 ```bash
-#!/bin/bash
-set -e
-
-CLUSTER_NAME="my-cluster"
-NODECLASS_NAME="default"
-
-echo "=== EKS AL2 to AL2023 迁移脚本 (Karpenter) ==="
-
-# 1. 备份
-echo "备份现有配置..."
-kubectl get ec2nodeclass $NODECLASS_NAME -o yaml > ec2nodeclass-backup-$(date +%Y%m%d).yaml
-kubectl get nodepool -o yaml > nodepool-backup-$(date +%Y%m%d).yaml
-
-# 2. 更新 EC2NodeClass
-echo "更新 EC2NodeClass..."
-kubectl patch ec2nodeclass $NODECLASS_NAME --type='json' -p='[
-  {"op": "replace", "path": "/spec/amiSelectorTerms/0/alias", "value": "al2023@latest"}
-]'
-
-# 3. 等待 drift 检测
-echo "等待 Karpenter drift 检测..."
-sleep 30
-
-# 4. 监控节点更新
-echo "监控节点更新进度..."
-watch -n 10 'kubectl get nodes -o custom-columns=NAME:.metadata.name,OS:.status.nodeInfo.osImage,STATUS:.status.conditions[3].type'
-
-echo "=== 迁移完成 ==="
-echo "请运行以下命令验证："
-echo "  kubectl get nodes -o wide"
-echo "  kubectl get pods --all-namespaces"
+./scripts/check-compatibility.sh
 ```
 
-### 完整迁移脚本（托管节点组 - 蓝绿）
+**检查项目**：
+- Kubernetes 版本
+- VPC CNI 版本
+- Java 应用 cgroupv2 兼容性
+- IMDSv2 依赖组件
+- 关键控制器版本
+- 当前节点 OS 分布
+
+### 2. 生成用户数据脚本
+
+自动生成 AL2023 节点的用户数据配置：
 
 ```bash
-#!/bin/bash
-set -e
+./scripts/generate-al2023-userdata.sh <cluster-name> <region> [output-file]
+```
 
-CLUSTER_NAME="my-cluster"
-OLD_NG="al2-ng"
-NEW_NG="al2023-ng"
-REGION="us-west-2"
+**示例**：
+```bash
+./scripts/generate-al2023-userdata.sh my-cluster us-west-2
+```
 
-echo "=== EKS AL2 to AL2023 迁移脚本 (蓝绿部署) ==="
+**输出**：
+- `al2023-userdata.txt` - 可读的 MIME 格式用户数据
+- `al2023-userdata-base64.txt` - Base64 编码（用于启动模板）
 
-# 1. 创建新节点组
-echo "创建 AL2023 节点组..."
-eksctl create nodegroup \
-  --cluster $CLUSTER_NAME \
-  --name $NEW_NG \
-  --node-ami-family AmazonLinux2023 \
-  --node-type t3.medium \
-  --nodes 3 \
-  --region $REGION
+### 3. Karpenter 自动迁移脚本
 
-# 2. 等待节点就绪
-echo "等待新节点就绪..."
-kubectl wait --for=condition=Ready nodes -l eks.amazonaws.com/nodegroup=$NEW_NG --timeout=10m
+最简单的迁移方式（推荐使用 Karpenter 的用户）：
 
-# 3. 标记旧节点
-echo "标记旧节点..."
-for node in $(kubectl get nodes -l eks.amazonaws.com/nodegroup=$OLD_NG -o name); do
-  kubectl taint nodes ${node#node/} old-node=true:NoSchedule
-done
+```bash
+./scripts/migrate-karpenter.sh <cluster-name> <ec2nodeclass-name>
+```
 
-# 4. 迁移工作负载
-echo "迁移工作负载..."
-for node in $(kubectl get nodes -l eks.amazonaws.com/nodegroup=$OLD_NG -o name); do
-  echo "Draining ${node#node/}..."
-  kubectl drain ${node#node/} \
-    --ignore-daemonsets \
-    --delete-emptydir-data \
-    --force \
-    --grace-period=300
-  sleep 60
-done
+**示例**：
+```bash
+./scripts/migrate-karpenter.sh my-cluster default
+```
 
-# 5. 验证
-echo "验证迁移结果..."
-OLD_PODS=$(kubectl get pods --all-namespaces -o wide | grep -c $OLD_NG || true)
-if [ $OLD_PODS -eq 0 ]; then
-  echo "✅ 所有 Pod 已迁移"
-else
-  echo "⚠️  仍有 $OLD_PODS 个 Pod 在旧节点上"
-  exit 1
-fi
+**功能**：
+- 自动备份现有配置
+- 更新 EC2NodeClass 到 AL2023
+- 等待 Karpenter drift 检测
+- 可选监控节点更新进度
 
-# 6. 删除旧节点组（需要确认）
-read -p "删除旧节点组 $OLD_NG? (yes/no) " -n 3 -r
-echo
-if [[ $REPLY =~ ^yes$ ]]; then
-  echo "删除旧节点组..."
-  eksctl delete nodegroup \
-    --cluster $CLUSTER_NAME \
-    --name $OLD_NG \
-    --region $REGION
-  echo "✅ 迁移完成！"
-else
-  echo "保留旧节点组。稍后手动删除："
-  echo "  eksctl delete nodegroup --cluster $CLUSTER_NAME --name $OLD_NG"
-fi
+**时间**：5 分钟配置 + 10-30 分钟自动更新
+
+### 4. 托管节点组蓝绿迁移脚本
+
+零停机的蓝绿部署迁移：
+
+```bash
+./scripts/migrate-managed-nodegroup-bluegreen.sh \
+  <cluster-name> \
+  <old-nodegroup> \
+  <new-nodegroup> \
+  <region>
+```
+
+**示例**：
+```bash
+./scripts/migrate-managed-nodegroup-bluegreen.sh \
+  my-cluster \
+  al2-nodegroup \
+  al2023-nodegroup \
+  us-west-2
+```
+
+**流程**：
+1. 检测旧节点组配置（实例类型、节点数量等）
+2. 创建新的 AL2023 节点组（使用相同配置）
+3. 等待新节点就绪
+4. 标记旧节点不可调度
+5. 逐个 drain 旧节点（优雅迁移工作负载）
+6. 验证迁移结果
+7. 可选：删除旧节点组
+
+**时间**：30-60 分钟（取决于工作负载数量）
+
+### 快速使用示例
+
+**场景 1：使用 Karpenter（最简单）**
+
+```bash
+# 1. 检查兼容性
+./scripts/check-compatibility.sh
+
+# 2. 执行迁移
+./scripts/migrate-karpenter.sh my-cluster default
+
+# 3. 监控进度
+kubectl get nodes -o wide -w
+```
+
+**场景 2：使用托管节点组**
+
+```bash
+# 1. 检查兼容性
+./scripts/check-compatibility.sh
+
+# 2. 执行蓝绿迁移
+./scripts/migrate-managed-nodegroup-bluegreen.sh \
+  my-cluster al2-ng al2023-ng us-west-2
+
+# 脚本会自动完成所有步骤并提示删除旧节点组
+```
+
+**场景 3：自定义用户数据**
+
+```bash
+# 1. 生成基础用户数据
+./scripts/generate-al2023-userdata.sh my-cluster us-west-2
+
+# 2. 编辑 al2023-userdata.txt 添加自定义配置
+vim al2023-userdata.txt
+
+# 3. 重新生成 Base64 编码
+cat al2023-userdata.txt | base64 > al2023-userdata-base64.txt  # Linux
+cat al2023-userdata.txt | base64 > al2023-userdata-base64.txt  # macOS
+
+# 4. 在启动模板中使用 al2023-userdata-base64.txt
 ```
 
 ---
