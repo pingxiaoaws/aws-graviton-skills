@@ -197,10 +197,10 @@ echo "节点 OS 版本:"
 kubectl get nodes -o custom-columns=NAME:.metadata.name,OS:.status.nodeInfo.osImage,KERNEL:.status.nodeInfo.kernelVersion
 echo ""
 
-# 使用精确匹配避免 AL2023 被计入 AL2
-AL2_COUNT=$(kubectl get nodes -o json 2>/dev/null | jq -r '.items[].status.nodeInfo.osImage' | grep -cP "Amazon Linux 2(?! 2023)" || true)
-AL2023_COUNT=$(kubectl get nodes -o json 2>/dev/null | jq -r '.items[].status.nodeInfo.osImage' | grep -c "Amazon Linux 2023" || true)
-BR_COUNT=$(kubectl get nodes -o json 2>/dev/null | jq -r '.items[].status.nodeInfo.osImage' | grep -c "Bottlerocket" || true)
+# 使用 jq 过滤确保精确匹配，避免 AL2023 被计入 AL2
+AL2_COUNT=$(kubectl get nodes -o json 2>/dev/null | jq '[.items[].status.nodeInfo.osImage | select(test("Amazon Linux 2") and (test("2023") | not))] | length')
+AL2023_COUNT=$(kubectl get nodes -o json 2>/dev/null | jq '[.items[].status.nodeInfo.osImage | select(test("Amazon Linux 2023"))] | length')
+BR_COUNT=$(kubectl get nodes -o json 2>/dev/null | jq '[.items[].status.nodeInfo.osImage | select(test("Bottlerocket"))] | length')
 
 echo "统计:"
 echo "  AL2 节点: $AL2_COUNT"

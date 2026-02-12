@@ -195,7 +195,14 @@ Each Graviton vCPU is a full physical core (no hyperthreading). Push workloads c
 
 ### Python
 
-**Recommended**: Python 3.10+
+**⚠️ Strongly Recommended: Python 3.10+**
+
+Python 3.9 and earlier versions have significantly degraded performance on Graviton. Key reasons:
+- Missing ARM64-specific optimizations in the interpreter
+- NumPy/SciPy binary wheels may not be fully optimized
+- Performance gap can be 20-40% compared to Python 3.10+
+
+**Minimum Usable Version**: Python 3.8 (not recommended for production)
 
 ```bash
 # NumPy >= 1.21.1 with OpenBLAS >= 0.3.17 (includes Graviton-specific gemv/gemm)

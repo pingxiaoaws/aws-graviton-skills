@@ -78,7 +78,8 @@ if command -v perf &> /dev/null; then
     HAS_PERF=true
 else
     echo -e "  ${RED}[MISSING]${NC} perf"
-    echo "    Install: sudo yum install -y perf  # AL2/AL2023"
+    echo "    Install: sudo dnf install -y perf kernel-tools  # AL2023"
+    echo "    Install: sudo yum install -y perf  # AL2"
     echo "    Install: sudo apt install -y linux-tools-common linux-tools-$(uname -r)  # Ubuntu"
 fi
 

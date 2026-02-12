@@ -2,13 +2,52 @@
 # quick-check.sh - Fast compatibility check for Graviton migration
 # Usage: ./quick-check.sh [PROJECT_PATH]
 
-set -e
-
 PROJECT_PATH=${1:-.}
 YELLOW='\033[1;33m'
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 NC='\033[0m'
+
+# Show help
+if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+    cat << EOF
+Usage: $0 [PROJECT_PATH]
+
+Quick compatibility check for AWS Graviton migration.
+
+Arguments:
+  PROJECT_PATH    Path to project directory (default: current directory)
+
+Options:
+  -h, --help      Show this help message
+
+Description:
+  Scans project for:
+  - Dockerfiles and base images
+  - Python/Node.js dependencies
+  - Lambda functions with x86 architecture
+  - ECS/Fargate infrastructure code
+
+Examples:
+  $0                          # Check current directory
+  $0 /path/to/project         # Check specific project
+  $0 ~/my-app                 # Check project in home directory
+
+See also:
+  ./scripts/test-arm64-build.sh    - Build and test ARM64 images
+  ./scripts/detect-environment.sh  - Check current environment
+EOF
+    exit 0
+fi
+
+# Validate path exists
+if [ ! -d "$PROJECT_PATH" ]; then
+    echo -e "${RED}✗ Error: Directory not found: $PROJECT_PATH${NC}"
+    echo ""
+    echo "Usage: $0 [PROJECT_PATH]"
+    echo "Run with --help for more information"
+    exit 1
+fi
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "🚀 Quick Graviton Compatibility Check"
@@ -16,7 +55,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "Project: $PROJECT_PATH"
 echo ""
 
-cd "$PROJECT_PATH"
+cd "$PROJECT_PATH" || exit 1
 
 # Find Dockerfiles
 echo "🔍 Finding Dockerfiles..."
@@ -59,8 +98,6 @@ else
     ALL_PACKAGES=$(cat $REQ_FILES | grep -v "^#" | grep -v "^$" | cut -d'=' -f1 | cut -d'>' -f1 | cut -d'<' -f1 | cut -d'[' -f1 | sort -u)
     
     # Check for known issues
-    ISSUES=0
-    
     echo "$ALL_PACKAGES" | while read -r pkg; do
         case "$pkg" in
             numpy)
@@ -139,10 +176,10 @@ echo ""
 # Calculate score
 SCORE=0
 if [ -n "$DOCKERFILES" ]; then
-    ((SCORE++))
+    ((SCORE++)) || true
 fi
 if [ -n "$REQ_FILES" ] || [ -n "$PKG_JSON" ]; then
-    ((SCORE++))
+    ((SCORE++)) || true
 fi
 
 if [ $SCORE -ge 2 ]; then
@@ -166,3 +203,4 @@ else
 fi
 
 echo ""
+exit 0
